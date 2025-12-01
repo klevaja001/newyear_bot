@@ -97,4 +97,29 @@ if __name__ == '__main__':
             time.sleep(5)
     
     Thread(target=polling).start()
+
     app.run(host='0.0.0.0', port=3000)
+
+import schedule
+import threading
+
+def send_daily_task():
+    """Отправляет задание каждый день в 8:00"""
+    current_month = datetime.now().month
+    current_hour = datetime.now().hour
+    
+    if current_month == 12 and current_hour == 8:
+        day = get_current_day()
+        task = tasks[day - 1]
+        send_message(USER_ID, f"🎄 Задание на {day} декабря:\n\n{task}\n\nУдачи! 🎅")
+        print(f"✅ Отправлено задание на {day} декабря")
+
+def schedule_checker():
+    """Проверяет расписание"""
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+# Добавьте в конец main функции или в __main__
+schedule.every().day.at("08:00").do(send_daily_task)
+Thread(target=schedule_checker).start()
