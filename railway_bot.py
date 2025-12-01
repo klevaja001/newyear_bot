@@ -1,24 +1,34 @@
 import os
-import requests
+import logging
+from flask import Flask, request
+import telebot
+from datetime import datetime
+import threading
 import time
 import schedule
-import json
-from datetime import datetime, date
-from flask import Flask
-from threading import Thread
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Настройки
-BOT_TOKEN = os.environ['BOT_TOKEN']
-USER_ID = os.environ['USER_ID']
-URL = f"https://api.telegram.org/bot{BOT_TOKEN}/"
-LAST_SENT_FILE = "last_sent.json"
+# Получаем токен и ID из переменных окружения Railway
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+USER_ID = os.environ.get('USER_ID')
 
-# Список заданий
+# Проверяем, что переменные заданы
+if not BOT_TOKEN or not USER_ID:
+    logger.error("❌ BOT_TOKEN или USER_ID не заданы в переменных окружения!")
+    raise ValueError("Задайте BOT_TOKEN и USER_ID в Railway Variables")
+
+bot = telebot.TeleBot(BOT_TOKEN)
+logger.info(f"✅ Бот инициализирован для пользователя {USER_ID}")
+
+# Список заданий (полный из 31 задания)
 tasks = [
     "Начать украшать квартиру к праздникам",
-    "Приготовить горячий шоколад с маршмеллоу и специями", 
+    "Приготовить горячий шоколад с маршмеллоу и специями",
     "Разыграть тайного Санту",
     "Составить новогодний плейлист для настроения",
     "Устроить вечер просмотра любимых зимних фильмов",
@@ -50,174 +60,165 @@ tasks = [
     "Загадать желание под бой курантов"
 ]
 
-def get_current_day():
-    """Определяет текущий день декабря"""
-    return min(datetime.now().day, 31)
+logger.info(f"✅ Загружено {len(tasks)} заданий")
 
-def load_last_sent():
-    """Загружает дату последней отправки"""
-    try:
-        with open(LAST_SENT_FILE, 'r') as f:
-            data = json.load(f)
-            return datetime.strptime(data['last_sent'], '%Y-%m-%d').date()
-    except:
-        return None
-
-def save_last_sent():
-    """Сохраняет сегодняшнюю дату как дату отправки"""
-    try:
-        with open(LAST_SENT_FILE, 'w') as f:
-            json.dump({'last_sent': date.today().isoformat()}, f)
-        return True
-    except:
-        return False
-
-def send_message(chat_id, text):
-    """Отправляет сообщение в Telegram"""
-    url = URL + "sendMessage"
-    params = {"chat_id": chat_id, "text": text}
-    try:
-        response = requests.post(url, params=params, timeout=10)
-        return response.status_code == 200
-    except Exception as e:
-        print(f"Ошибка отправки: {e}")
-        return False
-
-def send_daily_task():
-    """Отправляет задание если еще не отправляли сегодня"""
-    current_month = datetime.now().month
-    current_day = datetime.now().day
-    
-    print(f"🔍 Проверка: месяц={current_month}, день={current_day}")
-    
-    # Только декабрь
-    if current_month != 12 or current_day > 31:
-        print(f"⏭️ Не декабрь или день > 31")
-        return
-    
-    last_sent = load_last_sent()
-    today = date.today()
-    
-    # Если еще не отправляли сегодня
-    if last_sent != today:
-        day = get_current_day()
-        task = tasks[day - 1]
-        message = f"🎄 Задание на {day} декабря:\n\n{task}\n\nУдачи! 🎅"
-        
-        if send_message(USER_ID, message):
-            save_last_sent()
-            print(f"✅ Отправлено задание на {day} декабря")
-        else:
-            print(f"❌ Ошибка отправки задания")
-    else:
-        print(f"⏭️ Задание на сегодня уже отправлено")
-
-def send_today_task_manually(chat_id=None):
-    """Принудительно отправить сегодняшнее задание"""
-    current_month = datetime.now().month
-    
-    if current_month == 12:
-        day = get_current_day()
-        task = tasks[day - 1]
-        message = f"🎄 Задание на {day} декабря:\n\n{task}\n\nУдачи! 🎅"
-        
-        target_chat = chat_id if chat_id else USER_ID
-        if send_message(target_chat, message):
-            save_last_sent()
-            print(f"✅ Принудительно отправлено задание на {day} декабря")
-            return True
-    else:
-        if chat_id:
-            send_message(chat_id, "❌ Сейчас не декабрь! Задания начнутся с 1 декабря.")
-    return False
-
-def process_updates():
-    """Обрабатывает входящие сообщения"""
-    try:
-        url = URL + "getUpdates"
-        params = {"timeout": 30, "offset": -1}
-        response = requests.get(url, params=params, timeout=10)
-        updates = response.json()
-        
-        if "result" in updates:
-            for update in updates["result"]:
-                if "message" in update:
-                    chat_id = update["message"]["chat"]["id"]
-                    text = update["message"].get("text", "").lower()
-                    
-                    if text == "/start":
-                        send_message(chat_id, "🎄 Привет! Я новогодний бот!\n\nС 1 декабря я буду присылать тебе по одному заданию каждый день!\n\nКоманды:\n/today - задание на сегодня\n/sendnow - отправить сейчас\n/help - помощь")
-                    
-                    elif text == "/today":
-                        current_month = datetime.now().month
-                        if current_month == 12:
-                            day = get_current_day()
-                            task = tasks[day - 1]
-                            send_message(chat_id, f"🎄 Задание на {day} декабря:\n\n{task}")
-                        else:
-                            send_message(chat_id, "❄️ Задания начнутся с 1 декабря! Осталось совсем немного!")
-                    
-                    elif text == "/sendnow":
-                        if send_today_task_manually(chat_id):
-                            send_message(chat_id, "✅ Сегодняшнее задание отправлено!")
-                        else:
-                            send_message(chat_id, "❌ Сейчас не декабрь!")
-                    
-                    elif text == "/help":
-                        help_text = "🎅 Новогодний Бот Помощник\n\n"
-                        help_text += "Команды:\n"
-                        help_text += "/start - начать работу\n"
-                        help_text += "/today - задание на сегодня\n"
-                        help_text += "/sendnow - отправить задание сейчас\n"
-                        help_text += "/help - показать справку\n\n"
-                        help_text += "С 1 декабря - каждый день новое задание!"
-                        send_message(chat_id, help_text)
-    
-    except Exception as e:
-        print(f"Ошибка process_updates: {e}")
-
-def schedule_checker():
-    """Проверяет расписание"""
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+# ========== ROUTES ==========
 
 @app.route('/')
 def home():
-    return "🎄 Новогодний бот работает!"
+    """Главная страница для проверки работы"""
+    current_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    return f'''
+    <h1>🎄 Новогодний бот работает!</h1>
+    <p><strong>Время сервера:</strong> {current_time}</p>
+    <p><strong>Статус:</strong> ✅ Активен</p>
+    <p><strong>Заданий:</strong> {len(tasks)}</p>
+    <p><strong>USER_ID:</strong> {USER_ID}</p>
+    <hr>
+    <p>Бот будет отправлять задания каждый день в 8:00 по Москве (5:00 UTC)</p>
+    '''
+
+@app.route('/health')
+def health_check():
+    """Для health-check Railway"""
+    return 'OK', 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    process_updates()
-    return "OK"
+    """Вебхук для Telegram"""
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        logger.info("✅ Получено обновление от Telegram")
+        return ''
+    return 'Bad Request', 400
 
-def main():
-    # Настраиваем расписание (для Москвы 8:00 = 5:00 UTC)
+# ========== BOT COMMANDS ==========
+
+@bot.message_handler(commands=['start'])
+def send_welcome(message):
+    """Обработчик команды /start"""
+    welcome_text = '''
+🎅 *Привет! Я Новогодний бот!*
+
+Каждый день в 8:00 утра я буду присылать тебе праздничное задание на день.
+
+*Доступные команды:*
+/today - Задание на сегодня
+/task <число> - Задание на конкретный день (1-31)
+/help - Справка
+
+*Настройки:*
+• Время отправки: 8:00 утра (МСК)
+• Период: 1-31 декабря
+• Заданий всего: 31
+
+_Готов окунуться в праздничную атмосферу? 🎄_
+    '''
+    bot.reply_to(message, welcome_text, parse_mode='Markdown')
+    logger.info(f"👋 Отправлен welcome для пользователя {message.chat.id}")
+
+@bot.message_handler(commands=['today'])
+def send_today_task(message):
+    """Задание на сегодня"""
+    today = datetime.now().day
+    if 1 <= today <= 31:
+        task = tasks[today - 1]
+        response = f"🎁 *Задание на {today} декабря:*\n\n{task}"
+        bot.reply_to(message, response, parse_mode='Markdown')
+        logger.info(f"📅 Отправлено задание на сегодня ({today} декабря)")
+    else:
+        bot.reply_to(message, "🎅 Сейчас не декабрь! Задания доступны только с 1 по 31 декабря.")
+        logger.info("❌ Попытка получить задание вне декабря")
+
+@bot.message_handler(commands=['task'])
+def send_specific_task(message):
+    """Задание на конкретный день"""
+    try:
+        # Парсим команду /task 5
+        day = int(message.text.split()[1])
+        if 1 <= day <= 31:
+            task = tasks[day - 1]
+            response = f"🎁 *Задание на {day} декабря:*\n\n{task}"
+            bot.reply_to(message, response, parse_mode='Markdown')
+            logger.info(f"📆 Отправлено задание на {day} декабря")
+        else:
+            bot.reply_to(message, "❌ Укажите число от 1 до 31")
+    except (IndexError, ValueError):
+        bot.reply_to(message, "❌ Использование: /task <число от 1 до 31>")
+
+@bot.message_handler(commands=['help'])
+def send_help(message):
+    """Справка по командам"""
+    help_text = '''
+*🎄 Новогодний бот - Помощь*
+
+*Команды:*
+/start - Начало работы
+/today - Задание на сегодня
+/task <число> - Задание на конкретный день (1-31)
+/help - Эта справка
+
+*Расписание:*
+• Задания приходят каждый день в *8:00 утра (по Москве)*
+• Всего 31 задание на каждый день декабря
+• Бот активен с 1 по 31 декабря
+
+*Техническая информация:*
+• Серверное время: UTC
+• Перезапуск бота: автоматический
+• Статус: [newyearbot-production.up.railway.app](https://newyearbot-production.up.railway.app)
+
+_Вопросы или проблемы? Обрабатываю сообщения 24/7!_
+    '''
+    bot.reply_to(message, help_text, parse_mode='Markdown', disable_web_page_preview=True)
+
+@bot.message_handler(func=lambda message: True)
+def echo_all(message):
+    """Обработка любых других сообщений"""
+    bot.reply_to(message, "🎅 Используй /help чтобы увидеть доступные команды")
+
+# ========== SCHEDULED TASKS ==========
+
+def send_daily_task():
+    """Функция для ежедневной отправки задания"""
+    try:
+        today = datetime.now().day
+        if 1 <= today <= 31:
+            task = tasks[today - 1]
+            message_text = f"🎄 *Доброе утро!*\n\n*Задание на {today} декабря:*\n\n{task}\n\n_Удачного дня и праздничного настроения! 🎅_"
+            bot.send_message(USER_ID, message_text, parse_mode='Markdown')
+            logger.info(f"✅ Отправлено ежедневное задание на {today} декабря")
+        else:
+            logger.info("📅 Сегодня не декабрь, задание не отправлено")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при отправке ежедневного задания: {e}")
+
+def scheduler_loop():
+    """Фоновая задача для планировщика"""
+    # Настраиваем расписание: 5:00 UTC = 8:00 МСК
     schedule.every().day.at("05:00").do(send_daily_task)
-    print("⏰ Расписание: ежедневно в 5:00 UTC (8:00 по Москве)")
+    logger.info("⏰ Планировщик настроен на 05:00 UTC (8:00 МСК)")
     
-    # Запускаем проверку расписания в отдельном потоке
-    scheduler_thread = Thread(target=schedule_checker)
-    scheduler_thread.daemon = True
-    scheduler_thread.start()
+    # Также отправляем в 10:00 UTC для тестирования
+    schedule.every().day.at("10:00").do(lambda: logger.info("✅ Планировщик активен"))
     
-    # Запускаем обработку сообщений
-    def polling_loop():
-        while True:
-            process_updates()
-            time.sleep(5)
-    
-    polling_thread = Thread(target=polling_loop)
-    polling_thread.daemon = True
-    polling_thread.start()
-    
-    print("✅ Бот запущен и ждет 1 декабря!")
-    print(f"📅 Всего заданий: {len(tasks)}")
-    print(f"👤 USER_ID: {USER_ID}")
-    print("📱 Отправьте /sendnow чтобы получить задание сейчас")
-    
-    # Запускаем Flask
-    app.run(host='0.0.0.0', port=3000, debug=False)
+    while True:
+        schedule.run_pending()
+        time.sleep(60)  # Проверяем каждую минуту
+
+# ========== START APPLICATION ==========
 
 if __name__ == '__main__':
-    main()
+    # Запускаем планировщик в отдельном потоке
+    scheduler_thread = threading.Thread(target=scheduler_loop, daemon=True)
+    scheduler_thread.start()
+    logger.info("🚀 Планировщик запущен в фоновом потоке")
+    
+    # Получаем порт от Railway
+    port = int(os.environ.get('PORT', 5000))
+    logger.info(f"🌐 Запуск Flask на порту {port}")
+    
+    # Запускаем Flask
+    app.run(host='0.0.0.0', port=port, debug=False)
