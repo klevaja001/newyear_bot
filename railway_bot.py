@@ -1,8 +1,10 @@
 import os
 import requests
 import time
+import schedule
 from datetime import datetime
 from flask import Flask
+from threading import Thread
 
 app = Flask(__name__)
 
@@ -51,15 +53,16 @@ def send_message(chat_id, text):
     url = URL + "sendMessage"
     params = {"chat_id": chat_id, "text": text}
     try:
-        requests.post(url, params=params)
+        response = requests.post(url, params=params, timeout=5)
+        return response
     except:
-        pass
+        return None
 
 def process_updates():
     try:
         url = URL + "getUpdates"
-        params = {"timeout": 100}
-        response = requests.get(url, params=params)
+        params = {"timeout": 30, "offset": -1}
+        response = requests.get(url, params=params, timeout=10)
         updates = response.json()
         
         if "result" in updates:
@@ -71,14 +74,38 @@ def process_updates():
                     if text == "/start":
                         send_message(chat_id, "🎄 Привет! Я новогодний бот! С 1 декабря я буду присылать тебе задания каждый день!")
                     elif text == "/today":
-                        if datetime.now().month == 12:
+                        current_month = datetime.now().month
+                        if current_month == 12:
                             day = get_current_day()
                             task = tasks[day - 1]
-                            send_message(chat_id, f"🎄 Задание на {day} декабря: {task}")
+                            send_message(chat_id, f"🎄 Задание на {day} декабря:\n\n{task}")
                         else:
-                            send_message(chat_id, "❄️ Задания начнутся с 1 декабря!")
-    except:
-        pass
+                            send_message(chat_id, "❄️ Задания начнутся с 1 декабря! Осталось совсем немного!")
+    except Exception as e:
+        print(f"Ошибка process_updates: {e}")
+
+def send_daily_task():
+    """Отправляет задание каждый день в 8:00"""
+    current_month = datetime.now().month
+    current_hour = datetime.now().hour
+    current_day = datetime.now().day
+    
+    print(f"Проверка отправки: месяц={current_month}, час={current_hour}, день={current_day}")
+    
+    if current_month == 12 and current_day <= 31:
+        day = get_current_day()
+        task = tasks[day - 1]
+        result = send_message(USER_ID, f"🎄 Задание на {day} декабря:\n\n{task}\n\nУдачи! 🎅")
+        if result:
+            print(f"✅ Отправлено задание на {day} декабря")
+        else:
+            print(f"❌ Ошибка отправки задания на {day} декабря")
+
+def schedule_checker():
+    """Проверяет расписание"""
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
 
 @app.route('/')
 def home():
@@ -89,37 +116,26 @@ def webhook():
     process_updates()
     return "OK"
 
-if __name__ == '__main__':
-    from threading import Thread
-    def polling():
-        while True:
-            process_updates()
-            time.sleep(5)
+def main():
+    # Настраиваем расписание (для Москвы 8:00 = 5:00 UTC)
+    schedule.every().day.at("05:00").do(send_daily_task)
     
-    Thread(target=polling).start()
-
+    # Запускаем проверку расписания в отдельном потоке
+    scheduler_thread = Thread(target=schedule_checker)
+    scheduler_thread.daemon = True
+    scheduler_thread.start()
+    
+    # Запускаем обработку сообщений в отдельном потоке
+    polling_thread = Thread(target=lambda: [process_updates() for _ in iter(int, 1)])
+    polling_thread.daemon = True
+    polling_thread.start()
+    
+    print("✅ Бот запущен и ждет 1 декабря!")
+    print(f"📅 Всего заданий: {len(tasks)}")
+    print("⏰ Автоматическая отправка в 8:00 по Москве (5:00 UTC)")
+    
+    # Запускаем Flask
     app.run(host='0.0.0.0', port=3000)
 
-import schedule
-import threading
-
-def send_daily_task():
-    """Отправляет задание каждый день в 8:00"""
-    current_month = datetime.now().month
-    current_hour = datetime.now().hour
-    
-    if current_month == 12 and current_hour == 8:
-        day = get_current_day()
-        task = tasks[day - 1]
-        send_message(USER_ID, f"🎄 Задание на {day} декабря:\n\n{task}\n\nУдачи! 🎅")
-        print(f"✅ Отправлено задание на {day} декабря")
-
-def schedule_checker():
-    """Проверяет расписание"""
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
-
-# Добавьте в конец main функции или в __main__
-schedule.every().day.at("08:00").do(send_daily_task)
-Thread(target=schedule_checker).start()
+if __name__ == '__main__':
+    main()
